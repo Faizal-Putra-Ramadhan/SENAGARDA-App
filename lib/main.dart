@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_map_tile_caching/flutter_map_tile_caching.dart';
+
 import 'theme/app_theme.dart';
 import 'screens/main_screen.dart';
 
@@ -10,16 +10,6 @@ Future<void> main() async {
   // dengan D-pad di kanan-kiri saat mengendalikan rover.
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Inisialisasi Flutter Map Tile Caching (FMTC) --
-  // Tile peta yang pernah dimuat saat online akan disimpan di storage HP,
-  // sehingga saat di lapangan tanpa internet, peta tetap muncul.
-  try {
-    await FMTCObjectBoxBackend().initialise();
-    final store = FMTCStore('senagarda_map');
-    await store.manage.create();
-  } catch (e) {
-    debugPrint("FMTC Initialization Error: $e");
-  }
 
   // Orientasi tidak dibatasi lagi karena ada layar Dashboard/Trap/Rover
   // yang lebih nyaman dalam portrait.

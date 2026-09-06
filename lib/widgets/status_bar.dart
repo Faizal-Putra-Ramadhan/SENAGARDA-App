@@ -19,22 +19,36 @@ class StatusBar extends StatelessWidget {
         color: Colors.black.withOpacity(0.65),
         borderRadius: BorderRadius.circular(14),
       ),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          _connectionDot(),
-          const SizedBox(width: 10),
-          _infoChip(Icons.satellite_alt_outlined, '${status.satellites}'),
-          const SizedBox(width: 14),
-          _infoChip(
-            Icons.explore_outlined,
-            '${status.heading.toStringAsFixed(0)}°',
+          Row(
+            children: [
+              _connectionDot(),
+              const SizedBox(width: 10),
+              _infoChip(Icons.satellite_alt_outlined, '${status.satellites}'),
+              const SizedBox(width: 14),
+              _infoChip(
+                Icons.explore_outlined,
+                '${status.heading.toStringAsFixed(0)}°',
+              ),
+              const Spacer(),
+              if (status.isRecording) ...[
+                _recordingBadge(),
+                const SizedBox(width: 8),
+              ],
+              _modeBadge(),
+            ],
           ),
-          const Spacer(),
-          if (status.isRecording) ...[
-            _recordingBadge(),
-            const SizedBox(width: 8),
-          ],
-          _modeBadge(),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              _infoChip(
+                Icons.location_on_outlined, 
+                'Lat: ${status.lat.toStringAsFixed(5)}, Lng: ${status.lng.toStringAsFixed(5)}',
+              ),
+            ],
+          ),
         ],
       ),
     );

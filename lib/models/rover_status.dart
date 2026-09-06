@@ -123,13 +123,18 @@ class RoverStatus {
     if (parts.length < 6) {
       throw FormatException('Format status tidak lengkap: $raw');
     }
+    double rawLat = double.tryParse(parts[2]) ?? 0;
+    // Jika koordinat positif, paksa menjadi negatif karena wilayah Imogiri berada di Lintang Selatan (LS).
+    // Ini menangani kasus jika Arduino/GPS salah mengirimkan nilai mutlak tanpa indikator S (South).
+    if (rawLat > 0) rawLat = -rawLat;
+
     return RoverStatus(
       connected: true,
       mode: parts[0].trim().toUpperCase() == 'A'
           ? RoverMode.autonomous
           : RoverMode.manual,
       heading: double.tryParse(parts[1]) ?? 0,
-      lat: double.tryParse(parts[2]) ?? 0,
+      lat: rawLat,
       lng: double.tryParse(parts[3]) ?? 0,
       satellites: int.tryParse(parts[4]) ?? 0,
       isRecording: parts[5].trim() == '1',

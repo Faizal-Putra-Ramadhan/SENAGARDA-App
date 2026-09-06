@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:flutter_map_tile_caching/flutter_map_tile_caching.dart';
+import 'package:flutter_map_mbtiles/flutter_map_mbtiles.dart';
+import 'package:mbtiles/mbtiles.dart';
 import 'package:latlong2/latlong.dart';
+import '../utils/mbtiles_helper.dart';
 import 'dart:math' as math;
 import '../models/rover_status.dart';
 
@@ -23,6 +25,30 @@ class FlutterMapWidget extends StatefulWidget {
 
 class _FlutterMapWidgetState extends State<FlutterMapWidget> {
   final MapController _mapController = MapController();
+  MbTiles? _mbTiles;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMbTiles();
+  }
+
+  Future<void> _loadMbTiles() async {
+    try {
+      final path = await MbTilesHelper.getMbTilesPath();
+      setState(() {
+        _mbTiles = MbTiles(mbtilesPath: path);
+      });
+    } catch (e) {
+      debugPrint('Error loading MBTiles: $e');
+    }
+  }
+
+  @override
+  void dispose() {
+    _mbTiles?.dispose();
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(FlutterMapWidget oldWidget) {
@@ -47,11 +73,14 @@ class _FlutterMapWidgetState extends State<FlutterMapWidget> {
       widget.status.lng != 0 ? widget.status.lng : 110.3805
     );
 
-    return FlutterMap(
+    return _mbTiles == null 
+      ? const Center(child: CircularProgressIndicator())
+      : FlutterMap(
       mapController: _mapController,
       options: MapOptions(
         initialCenter: roverPos,
-        initialZoom: 18.0,
+        initialZoom: 16.5,
+        maxZoom: 22.0,
         onPositionChanged: (position, hasGesture) {
           if (hasGesture && widget.ikutiRover) {
             widget.onIkutiRoverChanged(false);
@@ -60,11 +89,8 @@ class _FlutterMapWidgetState extends State<FlutterMapWidget> {
       ),
       children: [
         TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'com.nawasena.senagarda',
-          tileProvider: FMTCStore('senagarda_map').getTileProvider(
-            loadingStrategy: BrowseLoadingStrategy.cacheOnly,
-          ),
+          tileProvider: MbTilesTileProvider(mbtiles: _mbTiles!),
+          maxNativeZoom: 16,
         ),
         PolylineLayer(
           polylines: [
