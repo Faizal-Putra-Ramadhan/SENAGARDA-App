@@ -68,7 +68,13 @@ class WebSocketRoverService implements RoverService {
       try {
         final baru = RoverStatus.fromProtocolString(teks);
         // Waypoint TIDAK datang dari rover -- pertahankan yg sudah ada di app.
-        _status = baru.copyWith(waypoints: _status.waypoints);
+        // PENTING: Pertahankan juga isPlaying dan currentWaypointIndex karena
+        // rover tidak mengirim state misi tersebut di protokol LoRa lama.
+        _status = baru.copyWith(
+          waypoints: _status.waypoints,
+          isPlaying: _status.isPlaying,
+          currentWaypointIndex: _status.currentWaypointIndex,
+        );
         _terakhirTerimaStatus = DateTime.now();
         _controller.add(_status);
       } catch (_) {

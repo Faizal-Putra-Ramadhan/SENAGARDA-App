@@ -48,6 +48,7 @@ class RoverStatus {
   final double lng;
   final int satellites;
   final bool isRecording;
+  final int battery;
   final List<Waypoint> waypoints;
 
   /// true selama rover sedang menjalankan misi autonomous (dari PLAY
@@ -67,6 +68,7 @@ class RoverStatus {
     required this.lng,
     required this.satellites,
     required this.isRecording,
+    this.battery = 0,
     this.waypoints = const [],
     this.isPlaying = false,
     this.currentWaypointIndex = -1,
@@ -82,6 +84,7 @@ class RoverStatus {
       lng: 110.3805,
       satellites: 0,
       isRecording: false,
+      battery: 0,
       waypoints: [],
       isPlaying: false,
       currentWaypointIndex: -1,
@@ -96,6 +99,7 @@ class RoverStatus {
     double? lng,
     int? satellites,
     bool? isRecording,
+    int? battery,
     List<Waypoint>? waypoints,
     bool? isPlaying,
     int? currentWaypointIndex,
@@ -108,16 +112,17 @@ class RoverStatus {
       lng: lng ?? this.lng,
       satellites: satellites ?? this.satellites,
       isRecording: isRecording ?? this.isRecording,
+      battery: battery ?? this.battery,
       waypoints: waypoints ?? this.waypoints,
       isPlaying: isPlaying ?? this.isPlaying,
       currentWaypointIndex: currentWaypointIndex ?? this.currentWaypointIndex,
     );
   }
 
-  /// Parse dari string protokol "ST:mode,heading,lat,lng,sats,rec"
+  /// Parse dari string protokol "ST:mode,heading,lat,lng,sats,rec,batt"
   /// Dipakai nanti saat RoverService asli (LoRa/Bluetooth) menerima data.
   factory RoverStatus.fromProtocolString(String raw) {
-    // raw contoh: "ST:M,45.2,-7.9285,110.3805,8,1"
+    // raw contoh: "ST:M,45.2,-7.9285,110.3805,8,1,95"
     final body = raw.startsWith('ST:') ? raw.substring(3) : raw;
     final parts = body.split(',');
     if (parts.length < 6) {
@@ -127,6 +132,11 @@ class RoverStatus {
     // Jika koordinat positif, paksa menjadi negatif karena wilayah Imogiri berada di Lintang Selatan (LS).
     // Ini menangani kasus jika Arduino/GPS salah mengirimkan nilai mutlak tanpa indikator S (South).
     if (rawLat > 0) rawLat = -rawLat;
+
+    int parsedBattery = 0;
+    if (parts.length >= 7) {
+      parsedBattery = int.tryParse(parts[6]) ?? 0;
+    }
 
     return RoverStatus(
       connected: true,
@@ -138,6 +148,7 @@ class RoverStatus {
       lng: double.tryParse(parts[3]) ?? 0,
       satellites: int.tryParse(parts[4]) ?? 0,
       isRecording: parts[5].trim() == '1',
+      battery: parsedBattery,
     );
   }
 }

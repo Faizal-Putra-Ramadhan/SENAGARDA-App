@@ -7,6 +7,8 @@ import '../utils/mbtiles_helper.dart';
 import 'dart:math' as math;
 import '../models/rover_status.dart';
 
+import '../theme/app_theme.dart';
+
 class FlutterMapWidget extends StatefulWidget {
   final RoverStatus status;
   final bool ikutiRover;
@@ -97,24 +99,44 @@ class _FlutterMapWidgetState extends State<FlutterMapWidget> {
             Polyline(
               points: widget.status.waypoints.map((w) => LatLng(w.lat, w.lng)).toList(),
               strokeWidth: 4.0,
-              color: Colors.blue,
+              color: AppTheme.accentGold,
             ),
           ],
         ),
         MarkerLayer(
           markers: [
-            // Waypoints
-            ...widget.status.waypoints.map((w) => Marker(
-              point: LatLng(w.lat, w.lng),
-              width: 12,
-              height: 12,
-              child: Container(
-                decoration: const BoxDecoration(
-                  color: Colors.red,
-                  shape: BoxShape.circle,
+            // Waypoints (A, B, C...)
+            ...widget.status.waypoints.asMap().entries.map((entry) {
+              final i = entry.key;
+              final w = entry.value;
+              final label = String.fromCharCode(65 + (i % 26)); // A, B, C...
+              final isTarget = widget.status.isPlaying && widget.status.currentWaypointIndex == i;
+              return Marker(
+                point: LatLng(w.lat, w.lng),
+                width: 28,
+                height: 28,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: isTarget ? AppTheme.accentGold : AppTheme.primaryGreen,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 2),
+                    boxShadow: const [
+                      BoxShadow(color: Colors.black45, blurRadius: 4, offset: Offset(0, 2)),
+                    ],
+                  ),
+                  child: Center(
+                    child: Text(
+                      label,
+                      style: TextStyle(
+                        color: isTarget ? Colors.black : Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-            )),
+              );
+            }),
             // Rover Position
             Marker(
               point: roverPos,

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/app_theme.dart';
 
 class RoverScreen extends StatelessWidget {
@@ -96,9 +97,119 @@ class RoverScreen extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 16),
-            _buildRegistryItem('RVR-A01', 'ROVER 1', 'ONLINE', '84%', '-65dBm', 'Sawah Pak Aris', AppTheme.primaryGreen),
-            // _buildRegistryItem('RVR-B04', 'Beta Harvester', 'WARNING', '15%', '-72dBm', 'Sawah Pak Budi', AppTheme.accentGold),
-             _buildRegistryItem('RVR-D11', 'ROVER 2', 'OFFLINE', '--%', '--dBm', 'Sawah Pak Budi', Colors.white38, disabled: true),
+            
+            // Rover Registry from Supabase
+            StreamBuilder<List<Map<String, dynamic>>>(
+              stream: Supabase.instance.client
+                  .from('devices')
+                  .stream(primaryKey: ['id'])
+                  .eq('type', 'rover')
+                  .order('created_at', ascending: true),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snapshot.hasError) {
+                  final errStr = snapshot.error.toString();
+                  if (errStr.contains('SocketException') || errStr.contains('Failed host lookup')) {
+                    return const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(20.0),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            CircularProgressIndicator(color: AppTheme.accentGold),
+                            SizedBox(height: 16),
+                            Text('Menunggu koneksi internet...', style: TextStyle(color: Colors.white54)),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+                  if (errStr.contains('RealtimeSubscribeException') || errStr.contains('channelError')) {
+                    return const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(20.0),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.cloud_off, color: Colors.white38, size: 40),
+                            SizedBox(height: 12),
+                            Text('Mode Offline', style: TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.bold)),
+                            SizedBox(height: 4),
+                            Text('Tidak dapat terhubung ke server.\nPeriksa koneksi internet Anda.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white38, fontSize: 12)),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+                  return Text('Error: ${snapshot.error}', style: const TextStyle(color: Colors.red));
+                }
+                
+                final rovers = snapshot.data ?? [];
+                
+                if (rovers.isEmpty) {
+                  return const Center(child: Text('Tidak ada Rover terdaftar.', style: TextStyle(color: Colors.white54)));
+                }
+
+                return Column(
+                  children: rovers.map((rover) {
+                    final deviceId = rover['device_id'] as String;
+                    final name = rover['name'] ?? 'Rover $deviceId';
+                    final dbStatus = rover['status'] ?? 'offline';
+                    
+                    return StreamBuilder<List<Map<String, dynamic>>>(
+                      stream: Supabase.instance.client
+                          .from('rover_operations')
+                          .stream(primaryKey: ['id'])
+                          .eq('device_id', deviceId)
+                          .order('recorded_at', ascending: false)
+                          .limit(1),
+                      builder: (context, eventSnapshot) {
+                        String status = dbStatus.toString().toUpperCase();
+                        bool isOnline = status == 'ONLINE';
+                        
+                        String batt = '--';
+                        
+                        if (eventSnapshot.hasData && eventSnapshot.data!.isNotEmpty) {
+                          final latestEvent = eventSnapshot.data!.first;
+                          final recordedAtStr = latestEvent['recorded_at'] as String?;
+                          if (latestEvent['bats'] != null) {
+                            batt = '${latestEvent['bats']}%';
+                          }
+                          
+                          if (recordedAtStr != null) {
+                            final recordedAt = DateTime.parse(recordedAtStr);
+                            final now = DateTime.now();
+                            // Jika heartbeat/telemetri terakhir lebih dari 2 menit yang lalu, anggap OFFLINE
+                            if (now.difference(recordedAt).inMinutes > 2) {
+                              status = 'OFFLINE';
+                              isOnline = false;
+                            } else {
+                              status = 'ONLINE';
+                              isOnline = true;
+                            }
+                          }
+                        }
+
+                        Color color = isOnline ? AppTheme.primaryGreen : Colors.white38;
+                        
+                        return _buildRegistryItem(
+                          deviceId, 
+                          name, 
+                          status, 
+                          batt, // Battery dari rover_operations
+                          '--', // Signal
+                          'Sawah', 
+                          color,
+                          disabled: !isOnline
+                        );
+                      },
+                    );
+                  }).toList(),
+                );
+              },
+            ),
             
             const SizedBox(height: 80), // Padding for bottom nav
           ],

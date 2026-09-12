@@ -78,7 +78,7 @@
 // Skema baru: satu sisi motor maju dgn PWM MAKSIMAL, sisi lainnya
 // maju dgn PWM SANGAT RENDAH -- bukan lagi "pwm+200 / pwm-40" seperti
 // sebelumnya. Ini bikin belok jauh lebih tajam/cepat.
-#define TURN_PWM_FAST 255
+#define TURN_PWM_FAST 220
 #define TURN_PWM_SLOW 50
 
 #define TURN_TOLERANCE_DEG 3.0f
@@ -89,6 +89,10 @@
 #define GPS_SLOWDOWN_M 4.0
 #define GPS_MIN_SPEED_RATIO 0.50f
 #define PIN_ESTOP 0
+
+// --- BATERAI ---
+#define VOLTAGE_PIN 1
+
 // --- LoRa E22-400T ---
 #define LORA_RX_PIN 17
 #define LORA_TX_PIN 18
@@ -344,6 +348,9 @@ public:
     sLonLat_t l = gnss.getLat();
     cachedLat = l.latitudeDegree;
     if ((char)l.latDirection == 'S') cachedLat = -cachedLat;
+    
+    // [FIX] Paksa nilai latitude menjadi negatif karena lokasi di Imogiri (selatan ekuator)
+    if (cachedLat > 0.0) cachedLat = -cachedLat;
 
     sLonLat_t lo = gnss.getLon();
     cachedLon = lo.lonitudeDegree;
@@ -385,6 +392,7 @@ bool koneksiAktif = false;
 volatile bool mintaJalankanPath = false;
 String dataPathPending = "";
 volatile bool mintaKalibrasiArah = false;
+volatile bool mintaStopAuto = false;
 
 bool estopDitekan() { return digitalRead(PIN_ESTOP) == LOW; }
 
@@ -411,7 +419,7 @@ double bearingDerajat(double lat1, double lon1, double lat2, double lon2) {
 // ============================================================
 enum GerakAksi { DIAM, MAJU, MUNDUR, BELOK_KIRI, BELOK_KANAN };
 GerakAksi aksiSekarang = DIAM;
-int kecepatanSekarang = 150;
+int kecepatanSekarang = 220;
 float targetHeadingLurus = 0;
 unsigned long waktuPerintahTerakhir = 0;
 bool sedangAutonomous = false;
@@ -465,8 +473,9 @@ void belokBlocking(float derajat, int arahPutar, int kecepatanPwm) {
   while (millis() - mulai < TURN_TIMEOUT_MS) {
     kirimStatusBerkala();
     ws.cleanupClients();
-    if (estopDitekan() || !koneksiAktif) {
+    if (estopDitekan() || !koneksiAktif || mintaStopAuto) {
       if (!koneksiAktif) Serial.println("[PLAY] Koneksi putus di tengah belok, berhenti paksa.");
+      else if (mintaStopAuto) Serial.println("[PLAY] Dibatalkan oleh pengguna (STOP_AUTO) saat belok.");
       break;
     }
     float heading = imuSensor.getHeading();
@@ -482,7 +491,7 @@ void belokBlocking(float derajat, int arahPutar, int kecepatanPwm) {
   }
   motor.stop();
 }
-void majuBlockingSampaiJarak(int kecepatanPwm, double jarakTargetM, unsigned long timeoutMs) {
+void majuKalibrasiBlocking(int kecepatanPwm, double jarakTargetM, unsigned long timeoutMs) {
   double latAwal = gps.lat(), lonAwal = gps.lon();
   float targetHeading = imuSensor.getHeading();
   headingPid.reset();
@@ -490,8 +499,9 @@ void majuBlockingSampaiJarak(int kecepatanPwm, double jarakTargetM, unsigned lon
   while (millis() - mulai < timeoutMs) {
     kirimStatusBerkala();
     ws.cleanupClients();
-    if (estopDitekan() || !koneksiAktif) {
+    if (estopDitekan() || !koneksiAktif || mintaStopAuto) {
       if (!koneksiAktif) Serial.println("[PLAY] Koneksi putus di tengah jalan, berhenti paksa.");
+      else if (mintaStopAuto) Serial.println("[PLAY] Dibatalkan oleh pengguna (STOP_AUTO).");
       break;
     }
     double jarak = jarakMeter(latAwal, lonAwal, gps.lat(), gps.lon());
@@ -514,6 +524,55 @@ void majuBlockingSampaiJarak(int kecepatanPwm, double jarakTargetM, unsigned lon
   motor.stop();
 }
 
+float bearingKeHeadingIMU(double bearingGPS); // Forward declaration
+
+void gerakBlockingSampaiKoordinat(int kecepatanPwm, double targetLat, double targetLng, bool maju, float targetHeadingLine, unsigned long timeoutMs) {
+  headingPid.reset();
+  unsigned long mulai = millis();
+  double jarakTerdekat = 999999.0;
+  const double TOLERANSI_GPS_M = 2.5; // Toleransi 2.5m khusus modul GNSS DFRobot (mencegah stuck/overshoot)
+
+  while (millis() - mulai < timeoutMs) {
+    kirimStatusBerkala();
+    ws.cleanupClients();
+    if (estopDitekan() || !koneksiAktif || mintaStopAuto) {
+      if (!koneksiAktif) Serial.println("[PLAY] Koneksi putus di tengah jalan, berhenti paksa.");
+      else if (mintaStopAuto) Serial.println("[PLAY] Dibatalkan oleh pengguna (STOP_AUTO).");
+      break;
+    }
+    
+    double jarak = jarakMeter(gps.lat(), gps.lon(), targetLat, targetLng);
+    if (jarak <= TOLERANSI_GPS_M) break; // Sudah sampai dalam toleransi 2.5 meter
+    
+    // Deteksi overshoot
+    if (jarak < jarakTerdekat) {
+      jarakTerdekat = jarak;
+    } else if (jarak > jarakTerdekat + 1.0 && jarakTerdekat < 5.0) {
+      Serial.println("[PLAY] Overshoot terdeteksi, anggap sudah sampai.");
+      break;
+    }
+
+    int pwmDipakai;
+    if (jarak >= GPS_SLOWDOWN_M) pwmDipakai = kecepatanPwm;
+    else {
+      float rasio = (float)(jarak / GPS_SLOWDOWN_M);
+      pwmDipakai = (int)(kecepatanPwm * rasio);
+      int pwmMin = (int)(kecepatanPwm * GPS_MIN_SPEED_RATIO);
+      if (pwmDipakai < pwmMin) pwmDipakai = pwmMin;
+    }
+
+    float heading = imuSensor.getHeading();
+    float error = HeadingSensor::shortestError(targetHeadingLine, heading);
+    float koreksi = headingPid.compute(error);
+    
+    // Jika maju, arah PWM positif. Jika mundur, arah PWM negatif.
+    int dirPwm = maju ? pwmDipakai : -pwmDipakai;
+    motor.driveStraight(dirPwm, (int)koreksi);
+    delay(20);
+  }
+  motor.stop();
+}
+
 // ============================================================
 // AUTONOMOUS PLAY
 // ============================================================
@@ -523,7 +582,7 @@ bool kalibrasiHeadingViaGPS() {
   double lat0 = gps.lat(), lon0 = gps.lon();
   float headingAwal = imuSensor.getHeading();
   Serial.println("[KALIBRASI] Maju sebentar utk selaraskan heading IMU vs GPS...");
-  majuBlockingSampaiJarak(150, 2.0, 8000);
+  majuKalibrasiBlocking(DRIVE_PWM_SPEED, 2.0, 8000);
   if (!gps.adaFix()) return false;
   double jarak = jarakMeter(lat0, lon0, gps.lat(), gps.lon());
   if (jarak < 1.0) {
@@ -561,6 +620,7 @@ void mulaiJalankanPath(String data) {
   if (!gps.adaFix()) { Serial.println("[PLAY] Belum ada fix GPS, batal."); return; }
   if (!koneksiAktif) { Serial.println("[PLAY] Tidak ada koneksi aktif, batal."); return; }
   sedangAutonomous = true;
+  mintaStopAuto = false;
   aksiSekarang = DIAM;
   motor.stop();
   if (!kalibrasiHeadingViaGPS()) {
@@ -568,26 +628,49 @@ void mulaiJalankanPath(String data) {
     sedangAutonomous = false;
     return;
   }
-  for (int i = 0; i < jumlahTitikPath; i++) {
-    double jarakAwal = jarakMeter(gps.lat(), gps.lon(), jalurPath[i].lat, jalurPath[i].lng);
-    if (jarakAwal < 2.0) {
-      Serial.printf("[PLAY] Titik %d terlalu dekat (%.1fm), skip.\n", i + 1, jarakAwal);
-      continue;
-    }
-    double bearingGPS = bearingDerajat(gps.lat(), gps.lon(), jalurPath[i].lat, jalurPath[i].lng);
-    float targetIMU = bearingKeHeadingIMU(bearingGPS);
-    float sekarang = imuSensor.getHeading();
-    float selisih = HeadingSensor::shortestError(targetIMU, sekarang);
-    Serial.printf("[PLAY] Titik %d/%d: belok %.0f derajat\n", i + 1, jumlahTitikPath, selisih);
-    if (fabs(selisih) > TURN_TOLERANCE_DEG) {
-      belokBlocking(fabs(selisih), (selisih > 0 ? 1 : -1), 150);
-    }
-    double jarak = jarakMeter(gps.lat(), gps.lon(), jalurPath[i].lat, jalurPath[i].lng);
-    Serial.printf("[PLAY] Maju %.1f m ke titik %d\n", jarak, i + 1);
-    majuBlockingSampaiJarak(150, jarak, 60000);
-    if (estopDitekan()) { Serial.println("[PLAY] E-STOP, path dihentikan."); break; }
+  if (mintaStopAuto) {
+    Serial.println("[PLAY] Dibatalkan oleh pengguna setelah kalibrasi.");
+    sedangAutonomous = false;
+    return;
   }
-  Serial.println("[PLAY] Path selesai.");
+
+  int i = 0;
+  int arahPatroli = 1; // 1 untuk MAJU (A->B), -1 untuk MUNDUR (B->A)
+  // Langsung gunakan heading bodi saat ini tanpa belok/putar awal
+  float lineHeading = imuSensor.getHeading();
+
+  while (!mintaStopAuto) {
+    double jarakAwal = jarakMeter(gps.lat(), gps.lon(), jalurPath[i].lat, jalurPath[i].lng);
+    if (jarakAwal <= 2.5) {
+      Serial.printf("[PLAY] Titik %d dalam toleransi GPS (%.1fm), lanjut ke berikutnya.\n", i + 1, jarakAwal);
+    } else {
+      bool maju = (arahPatroli == 1);
+      Serial.printf("[PLAY] %s %.1f m menuju titik %d (langsung jalan tanpa belok)\n", maju ? "MAJU" : "MUNDUR", jarakAwal, i + 1);
+      gerakBlockingSampaiKoordinat(DRIVE_PWM_SPEED, jalurPath[i].lat, jalurPath[i].lng, maju, lineHeading, 60000);
+
+      if (estopDitekan()) { Serial.println("[PLAY] E-STOP, path dihentikan."); break; }
+      if (mintaStopAuto) break;
+    }
+
+    // Logika patroli maju mundur (looping terus tanpa belok/putar bodi)
+    if (jumlahTitikPath <= 1) break;
+
+    i += arahPatroli;
+    if (i >= jumlahTitikPath) {
+      i = jumlahTitikPath - 2;
+      arahPatroli = -1; // Berbalik arah motor: MUNDUR dari B ke A
+      if (i < 0) i = 0;
+    } else if (i < 0) {
+      i = 1;
+      arahPatroli = 1;  // Berbalik arah motor: MAJU dari A ke B
+      if (i >= jumlahTitikPath) i = 0;
+    }
+  }
+  if (mintaStopAuto) {
+    Serial.println("[PLAY] Path dihentikan oleh pengguna (STOP_AUTO).");
+  } else {
+    Serial.println("[PLAY] Path selesai.");
+  }
   sedangAutonomous = false;
 }
 
@@ -642,6 +725,9 @@ void rutePerintahMasuk(String cmd) {
   if (cmd.startsWith("PLAY:")) {
     dataPathPending = cmd.substring(5);
     mintaJalankanPath = true;
+  } else if (cmd == "STOP_AUTO") {
+    mintaStopAuto = true;
+    Serial.println("[WS] Menerima perintah STOP_AUTO, menghentikan misi!");
   } else if (cmd == "KALIBRASI_ARAH") {
     mintaKalibrasiArah = true;
   } else {
@@ -690,10 +776,12 @@ void kirimStatusBerkala() {
   float headingKirim = HeadingSensor::normalize(
     imuSensor.getHeading() + offsetHeadingVsGPS
   );
+  int battPercent = map(analogRead(VOLTAGE_PIN), 0, 4095, 0, 100);
+  battPercent = constrain(battPercent, 0, 100);
   char buf[140];
-  snprintf(buf, sizeof(buf), "ST:%s,%.1f,%.6f,%.6f,%d,%d",
+  snprintf(buf, sizeof(buf), "ST:%s,%.1f,%.6f,%.6f,%d,%d,%d",
     modeStr, headingKirim, latKirim, lonKirim,
-    gps.jumlahSatelit(), sedangRekam ? 1 : 0);
+    gps.jumlahSatelit(), sedangRekam ? 1 : 0, battPercent);
   ws.textAll(buf);
 }
 
@@ -788,6 +876,10 @@ void setup() {
   } else {
     Serial.println("[LoRa] E22 GAGAL diinisialisasi -- cek wiring M0/M1/AUX/RX/TX.");
   }
+  
+  // Inisialisasi pin tegangan
+  pinMode(VOLTAGE_PIN, INPUT);
+  
   Serial.println("=== SIAP MENERIMA KONEKSI DARI APP (WIFI) ===");
 }
 void debugGPSBerkala() {
@@ -824,10 +916,12 @@ void kirimStatusLoRaBerkala() {
   float headingKirim = HeadingSensor::normalize(
     imuSensor.getHeading() + offsetHeadingVsGPS
   );
+  int battPercent = map(analogRead(VOLTAGE_PIN), 0, 4095, 0, 100);
+  battPercent = constrain(battPercent, 0, 100);
   char buf[100];
-  snprintf(buf, sizeof(buf), "ST:%s,%.1f,%.6f,%.6f,%d,%d",
+  snprintf(buf, sizeof(buf), "ST:%s,%.1f,%.6f,%.6f,%d,%d,%d",
     modeStr, headingKirim, latKirim, lonKirim,
-    gps.jumlahSatelit(), sedangRekam ? 1 : 0);
+    gps.jumlahSatelit(), sedangRekam ? 1 : 0, battPercent);
   lora.sendMessage(String(buf));
 }
 void loop() {
@@ -846,4 +940,5 @@ void loop() {
   kirimStatusBerkala();
   kirimStatusLoRaBerkala();
   debugGPSBerkala();
+
 }

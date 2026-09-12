@@ -19,12 +19,15 @@ dependencies:
   mbtiles: ^0.4.2
   path_provider: ^2.1.6
   sqlite3_flutter_libs: ^0.5.42
+  supabase_flutter: ^2.17.2
+  flutter_dotenv: ^6.0.1
 dev_dependencies:
   flutter_lints: ^4.0.0
 
 flutter:
   uses-material-design: true
   assets:
+    - .env
     - assets/images/rover_foto.png
     - assets/images/rover_top.png
     - assets/map/karangtengahMao.mbtiles

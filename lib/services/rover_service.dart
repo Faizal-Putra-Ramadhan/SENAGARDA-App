@@ -59,9 +59,8 @@ class MockRoverService implements RoverService {
   static const double _kecepatanMisi = 1.0;
 
   /// Jarak (meter) yang dianggap "sudah sampai" di waypoint target.
-  /// Agak longgar supaya simulasi tidak stuck di satu titik karena
-  /// overshoot aritmatika floating-point.
-  static const double _toleransiSampai = 1.5;
+  /// Disesuaikan dengan toleransi GPS GNSS DFRobot (2.5 meter) agar tidak stuck.
+  static const double _toleransiSampai = 2.5;
 
   MockRoverService() {
     _muatMisiTersimpan();
@@ -188,6 +187,8 @@ class MockRoverService implements RoverService {
     _controller.add(_status);
   }
 
+  int _arahPatroli = 1; // 1 = maju (A->B), -1 = mundur (B->A)
+
   // --- Simulasi misi autonomous (PLAY) ---
 
   /// Mulai jalankan misi: rover bergerak otomatis dari waypoint ke
@@ -196,6 +197,7 @@ class MockRoverService implements RoverService {
     if (_status.waypoints.isEmpty) return; // tidak ada jalur
     if (_status.isPlaying) return; // sudah jalan
 
+    _arahPatroli = 1;
     _status = _status.copyWith(
       isPlaying: true,
       currentWaypointIndex: 0,
@@ -212,7 +214,7 @@ class MockRoverService implements RoverService {
 
   /// Satu langkah animasi misi: gerakkan rover mendekat ke waypoint
   /// target saat ini. Kalau sudah sampai, pindah ke waypoint berikutnya.
-  /// Kalau semua waypoint sudah dilalui, misi selesai.
+  /// Berjalan maju mundur (bolak-balik A -> B -> A -> B...) sesuai patroli firmware.
   void _tickMisi() {
     final idx = _status.currentWaypointIndex;
     if (idx < 0 || idx >= _status.waypoints.length) {
@@ -226,37 +228,47 @@ class MockRoverService implements RoverService {
     );
 
     if (jarak < _toleransiSampai) {
-      // Sudah sampai di waypoint ini — lanjut ke berikutnya
-      final idxBerikutnya = idx + 1;
-      if (idxBerikutnya >= _status.waypoints.length) {
-        // Semua waypoint sudah dilalui — misi selesai!
+      if (_status.waypoints.length <= 1) {
         _hentikanMisi();
         return;
       }
+
+      // Logika patroli maju-mundur (A -> B -> A -> B...)
+      int idxBerikutnya = idx + _arahPatroli;
+      if (idxBerikutnya >= _status.waypoints.length) {
+        idxBerikutnya = _status.waypoints.length - 2;
+        _arahPatroli = -1;
+        if (idxBerikutnya < 0) idxBerikutnya = 0;
+      } else if (idxBerikutnya < 0) {
+        idxBerikutnya = 1;
+        _arahPatroli = 1;
+        if (idxBerikutnya >= _status.waypoints.length) idxBerikutnya = 0;
+      }
+
       _status = _status.copyWith(currentWaypointIndex: idxBerikutnya);
       _controller.add(_status);
       return;
     }
 
-    // Hitung heading ke waypoint target
-    final headingKeTarget = _hitungHeading(
-      _status.lat, _status.lng, target.lat, target.lng,
-    );
+    // Hitung heading lintasan utama (A -> B)
+    final w0 = _status.waypoints[0];
+    final w1 = _status.waypoints.length > 1 ? _status.waypoints[1] : target;
+    final headingLintasan = _hitungHeading(w0.lat, w0.lng, w1.lat, w1.lng);
 
-    // Geser rover ke arah target
+    // Geser rover sepanjang lintasan tanpa berputar 180° (Maju jika A->B, Mundur jika B->A)
     const metersPerDegreeLat = 111320.0;
     final metersPerDegreeLng = 111320.0 * cos(_status.lat * pi / 180);
-    final headingRad = headingKeTarget * pi / 180;
+    final headingRad = headingLintasan * pi / 180;
 
-    // Jangan overshoot — batasi langkah ke jarak sisa
     final langkah = jarak < _kecepatanMisi ? jarak : _kecepatanMisi;
-    final dLat = (langkah * cos(headingRad)) / metersPerDegreeLat;
-    final dLng = (langkah * sin(headingRad)) / metersPerDegreeLng;
+    final dLangkah = _arahPatroli * langkah;
+    final dLat = (dLangkah * cos(headingRad)) / metersPerDegreeLat;
+    final dLng = (dLangkah * sin(headingRad)) / metersPerDegreeLng;
 
     _status = _status.copyWith(
       lat: _status.lat + dLat,
       lng: _status.lng + dLng,
-      heading: _normalisasi(headingKeTarget),
+      heading: _normalisasi(headingLintasan),
     );
     _controller.add(_status);
   }

@@ -170,6 +170,7 @@ class ModeRecordPanel extends StatelessWidget {
   }
 
   Widget _tandaiTitikButton() {
+    final nextLabel = String.fromCharCode(65 + (status.waypoints.length % 26));
     return GestureDetector(
       onTap: () => onCommand('MARK'),
       child: Container(
@@ -185,7 +186,7 @@ class ModeRecordPanel extends StatelessWidget {
             const Icon(Icons.location_on, color: Color(0xFF1C2620), size: 16),
             const SizedBox(width: 6),
             Text(
-              'Tandai (${status.waypoints.length})',
+              'Tandai $nextLabel (${status.waypoints.length})',
               style: const TextStyle(
                 color: Color(0xFF1C2620),
                 fontSize: 12,
@@ -410,13 +411,17 @@ class AutoRunPanel extends StatelessWidget {
           if (adaJalur) ...[
             if (isPlaying) ...[
               // Sedang jalan -> tampilkan progres dan tombol Berhenti
-              Text(
-                'Menuju titik ${(status.currentWaypointIndex + 1).clamp(1, status.waypoints.length)} / ${status.waypoints.length}',
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 11,
-                ),
-              ),
+              Builder(builder: (context) {
+                final targetIdx = status.currentWaypointIndex.clamp(0, status.waypoints.length - 1);
+                final label = String.fromCharCode(65 + (targetIdx % 26));
+                return Text(
+                  'Patroli: Menuju Titik $label (${targetIdx + 1}/${status.waypoints.length})',
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 11,
+                  ),
+                );
+              }),
               const SizedBox(height: 8),
               GestureDetector(
                 onTap: () => onCommand('STOP_AUTO'),

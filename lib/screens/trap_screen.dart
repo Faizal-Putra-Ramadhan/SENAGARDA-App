@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/app_theme.dart';
 
 class TrapScreen extends StatefulWidget {
@@ -10,6 +11,7 @@ class TrapScreen extends StatefulWidget {
 
 class _TrapScreenState extends State<TrapScreen> {
   String? _selectedTrapId;
+  final _supabase = Supabase.instance.client;
 
   @override
   Widget build(BuildContext context) {
@@ -24,7 +26,7 @@ class _TrapScreenState extends State<TrapScreen> {
             color: AppTheme.accentGold,
             letterSpacing: 1.2,
             fontFamily: 'Poppins',
-            fontWeight: FontWeight.w700, // Menunjuk ke Poppins Regular
+            fontWeight: FontWeight.w700,
             fontSize: 26,
           ),
         ),
@@ -67,19 +69,114 @@ class _TrapScreenState extends State<TrapScreen> {
             _buildSummaryCard(),
             const SizedBox(height: 24),
             
-            // Trap List
-            _buildTrapListItem('TRP-001-A', 'Sawah Pak Aris', 'Terdeteksi Tikus', '98%', Colors.orange),
-            _buildTrapListItem('TRP-002-B', 'Sawah Pak Budi', 'Siap Beroperasi', '85%', AppTheme.primaryGreen),
-            _buildTrapListItem('TRP-003-C', 'Sawah Pak Chandra', 'Offline', '--%', Colors.redAccent, icon: Icons.wifi_off),
-            // _buildTrapListItem('TRP-004-D', 'Sawah Pak Doni', 'Idle / Armed', '92%', AppTheme.primaryGreen),
+            // Trap List from Supabase
+            StreamBuilder<List<Map<String, dynamic>>>(
+              stream: _supabase.from('devices').stream(primaryKey: ['id']).eq('type', 'trap').order('created_at', ascending: true),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snapshot.hasError) {
+                  final errStr = snapshot.error.toString();
+                  if (errStr.contains('SocketException') || errStr.contains('Failed host lookup')) {
+                    return const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(20.0),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            CircularProgressIndicator(color: AppTheme.accentGold),
+                            SizedBox(height: 16),
+                            Text('Menunggu koneksi internet...', style: TextStyle(color: Colors.white54)),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+                  if (errStr.contains('RealtimeSubscribeException') || errStr.contains('channelError')) {
+                    return const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(20.0),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.cloud_off, color: Colors.white38, size: 40),
+                            SizedBox(height: 12),
+                            Text('Mode Offline', style: TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.bold)),
+                            SizedBox(height: 4),
+                            Text('Tidak dapat terhubung ke server.\nPeriksa koneksi internet Anda.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white38, fontSize: 12)),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+                  return Center(child: Text('Error: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
+                }
+                
+                final traps = snapshot.data ?? [];
+                
+                if (traps.isEmpty) {
+                  return const Center(child: Text('Tidak ada Trap terdaftar.', style: TextStyle(color: Colors.white54)));
+                }
+                
+                return Column(
+                  children: traps.map((trap) {
+                    final deviceId = trap['device_id'] as String;
+                    final name = trap['name'] ?? 'Zone $deviceId';
+                    final dbStatus = trap['status'] ?? 'offline';
+                    
+                    return StreamBuilder<List<Map<String, dynamic>>>(
+                      stream: _supabase
+                          .from('trap_events')
+                          .stream(primaryKey: ['id'])
+                          .eq('device_id', deviceId)
+                          .order('recorded_at', ascending: false)
+                          .limit(1),
+                      builder: (context, eventSnapshot) {
+                        String status = dbStatus.toString().toUpperCase();
+                        Color statusColor = status == 'ONLINE' ? AppTheme.primaryGreen : Colors.redAccent;
+                        IconData? icon = status == 'ONLINE' ? null : Icons.wifi_off;
+
+                        if (eventSnapshot.hasData && eventSnapshot.data!.isNotEmpty) {
+                          final latestEvent = eventSnapshot.data!.first;
+                          final recordedAtStr = latestEvent['recorded_at'] as String?;
+                          if (recordedAtStr != null) {
+                            final recordedAt = DateTime.parse(recordedAtStr);
+                            final now = DateTime.now();
+                            // Jika heartbeat/event terakhir lebih dari 2 menit yang lalu, anggap OFFLINE
+                            if (now.difference(recordedAt).inMinutes > 2) {
+                              status = 'OFFLINE';
+                              statusColor = Colors.redAccent;
+                              icon = Icons.wifi_off;
+                            } else {
+                              status = 'ONLINE';
+                              statusColor = AppTheme.primaryGreen;
+                              icon = null;
+                            }
+                          }
+                        }
+
+                        return _buildTrapListItem(
+                          deviceId, 
+                          name, 
+                          status, 
+                          statusColor,
+                          icon: icon,
+                        );
+                      },
+                    );
+                  }).toList(),
+                );
+              },
+            ),
             
             const SizedBox(height: 24),
             
-            // Selected Trap Details (mocking TRP-001-A)
-            if (_selectedTrapId == 'TRP-001-A')
-              _buildTrapDetails(),
+            // Selected Trap Details
+            if (_selectedTrapId != null)
+              _buildTrapDetails(_selectedTrapId!),
               
-            const SizedBox(height: 80), // Padding for bottom nav
+            const SizedBox(height: 80),
           ],
         ),
       ),
@@ -102,7 +199,7 @@ class _TrapScreenState extends State<TrapScreen> {
               children: const [
                 Text('TRAP YANG AKTIF', style: TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
                 SizedBox(height: 4),
-                Text('2 / 3', style: TextStyle(color: AppTheme.primaryGreen, fontSize: 24, fontWeight: FontWeight.bold)),
+                Text('--', style: TextStyle(color: AppTheme.primaryGreen, fontSize: 24, fontWeight: FontWeight.bold)),
               ],
             ),
           ),
@@ -112,7 +209,7 @@ class _TrapScreenState extends State<TrapScreen> {
               children: const [
                 Text('TOTAL TERDETEKSI (24H)', style: TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
                 SizedBox(height: 4),
-                Text('03', style: TextStyle(color: AppTheme.accentGold, fontSize: 24, fontWeight: FontWeight.bold)),
+                Text('--', style: TextStyle(color: AppTheme.accentGold, fontSize: 24, fontWeight: FontWeight.bold)),
               ],
             ),
           ),
@@ -121,7 +218,7 @@ class _TrapScreenState extends State<TrapScreen> {
     );
   }
 
-  Widget _buildTrapListItem(String id, String zone, String status, String battery, Color statusColor, {IconData? icon}) {
+  Widget _buildTrapListItem(String id, String zone, String status, Color statusColor, {IconData? icon}) {
     bool isSelected = _selectedTrapId == id;
     
     return InkWell(
@@ -164,7 +261,7 @@ class _TrapScreenState extends State<TrapScreen> {
                   ),
                   child: icon != null 
                       ? Icon(icon, color: Colors.white54, size: 20)
-                      : null,
+                      : const Icon(Icons.pest_control, color: Colors.white54, size: 20),
                 ),
               ),
               Expanded(
@@ -192,7 +289,6 @@ class _TrapScreenState extends State<TrapScreen> {
                   children: [
                     Text(zone, style: const TextStyle(color: Colors.white70, fontSize: 12)),
                     const SizedBox(height: 4),
-                    Text('$battery Batt', style: const TextStyle(color: Colors.white54, fontSize: 12)),
                   ],
                 ),
               ),
@@ -203,7 +299,7 @@ class _TrapScreenState extends State<TrapScreen> {
     );
   }
 
-  Widget _buildTrapDetails() {
+  Widget _buildTrapDetails(String deviceId) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -211,115 +307,80 @@ class _TrapScreenState extends State<TrapScreen> {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppTheme.accentGold.withOpacity(0.5)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: StreamBuilder<List<Map<String, dynamic>>>(
+        stream: _supabase
+            .from('trap_events')
+            .stream(primaryKey: ['id'])
+            .eq('device_id', deviceId)
+            .order('recorded_at', ascending: false)
+            .limit(1), // Get only latest event
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          
+          final events = snapshot.data ?? [];
+          Map<String, dynamic>? latestEvent = events.isNotEmpty ? events.first : null;
+          
+          String powerLvl = '-- %';
+          String sigLvl = '-- dBm';
+          
+          if (latestEvent != null && latestEvent['data'] != null) {
+             final data = latestEvent['data'] as Map<String, dynamic>;
+             if (data['battery'] != null) powerLvl = '${data['battery']} %';
+             if (data['signal'] != null) sigLvl = '${data['signal']} dBm';
+          }
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'TRP-001-A',
-                style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    deviceId,
+                    style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                ],
               ),
-              IconButton(
-                icon: const Icon(Icons.refresh, color: Colors.white54),
-                onPressed: () {},
-                visualDensity: VisualDensity.compact,
+              const SizedBox(height: 24),
+              
+              // Stats Grid
+              GridView.count(
+                crossAxisCount: 2,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                mainAxisSpacing: 12,
+                crossAxisSpacing: 12,
+                childAspectRatio: 2.2,
+                children: [
+                  _buildStatBox('POWER LEVEL', powerLvl, Icons.battery_full),
+                  _buildStatBox('SIGNAL STRENGTH', sigLvl, Icons.signal_cellular_alt),
+                  _buildStatBox('LAST EVENT', latestEvent?['event_type'] ?? 'NONE', Icons.history),
+                ],
+              ),
+              const SizedBox(height: 24),
+              
+              // Actions
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () {},
+                  icon: const Icon(Icons.lock_open),
+                  label: const Text('REMOTE RELEASE DOOR'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primaryGreen.withOpacity(0.2),
+                    foregroundColor: AppTheme.primaryGreen,
+                    side: const BorderSide(color: AppTheme.primaryGreen),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
               ),
             ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              // Container(
-              //   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              //   decoration: BoxDecoration(
-              //     color: AppTheme.accentGold.withOpacity(0.2),
-              //     borderRadius: BorderRadius.circular(4),
-              //     border: Border.all(color: AppTheme.accentGold.withOpacity(0.5)),
-              //   ),
-              //   child: const Text('CAPTURE DETECTED', style: TextStyle(color: AppTheme.accentGold, fontSize: 10, fontWeight: FontWeight.bold)),
-              // ),
-              // const SizedBox(width: 12),
-              // const Text('Last Sync: 2 mins ago', style: TextStyle(color: Colors.white54, fontSize: 12)),
-            ],
-          ),
-          // const SizedBox(height: 24),
-          // const Text('INTERNAL CAMERA FEED', style: TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
-          // const SizedBox(height: 12),
-          
-          // Camera feed placeholder
-          Container(
-            // height: 180,
-            // width: double.infinity,
-            // decoration: BoxDecoration(
-            //   color: Colors.black,
-            //   borderRadius: BorderRadius.circular(8),
-            //   border: Border.all(color: Colors.white12),
-            // ),
-            child: Stack(
-              children: [
-                // Center(
-                //   child: Icon(Icons.camera_alt, color: Colors.white12, size: 48),
-                // ),
-                // Positioned(
-                //   top: 8, left: 8,
-                //   child: Container(
-                //     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                //     color: Colors.black54,
-                //     child: const Text('REC_CAM_01', style: TextStyle(color: Colors.white, fontSize: 10)),
-                //   ),
-                // ),
-                // Positioned(
-                //   bottom: 8, right: 8,
-                //   child: Row(
-                //     children: [
-                //       Container(width: 6, height: 6, decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle)),
-                //       const SizedBox(width: 4),
-                //       const Text('MOTION DETECTED', style: TextStyle(color: Colors.red, fontSize: 10, fontWeight: FontWeight.bold)),
-                //     ],
-                //   ),
-                // ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-          
-          // Stats Grid
-          GridView.count(
-            crossAxisCount: 2,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            mainAxisSpacing: 12,
-            crossAxisSpacing: 12,
-            childAspectRatio: 2.2,
-            children: [
-              _buildStatBox('POWER LEVEL', '98.2 %', Icons.battery_full),
-              _buildStatBox('SIGNAL STRENGTH', '-68 dBm', Icons.signal_cellular_alt),
-              // _buildStatBox('TEMPERATURE', '24.5 °C', Icons.thermostat),
-              _buildStatBox('UPTIME', '14d 08h', Icons.access_time),
-            ],
-          ),
-          const SizedBox(height: 24),
-          
-          // Actions
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () {},
-              icon: const Icon(Icons.lock_open),
-              label: const Text('REMOTE RELEASE DOOR'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primaryGreen.withOpacity(0.2),
-                foregroundColor: AppTheme.primaryGreen,
-                side: const BorderSide(color: AppTheme.primaryGreen),
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-            ),
-          ),
-        ],
-      ),
+          );
+        }
+      )
     );
   }
 

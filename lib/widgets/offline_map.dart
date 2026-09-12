@@ -142,13 +142,39 @@ class _GridMapPainter extends CustomPainter {
       }
       canvas.drawPath(path, pathPaint);
 
-      // Gambar titik-titik waypoint
-      final wpPaint = Paint()
-        ..color = AppTheme.primaryGreen
-        ..style = PaintingStyle.fill;
-      for (final w in status.waypoints) {
+      // Gambar titik-titik waypoint dengan label A, B, C...
+      for (int i = 0; i < status.waypoints.length; i++) {
+        final w = status.waypoints[i];
         final wpPos = center + latLngToLocal(w.lat, w.lng, refLat, refLng);
-        canvas.drawCircle(wpPos, 6 * zoom, wpPaint);
+        final isTarget = status.isPlaying && status.currentWaypointIndex == i;
+
+        final wpPaint = Paint()
+          ..color = isTarget ? AppTheme.accentGold : AppTheme.primaryGreen
+          ..style = PaintingStyle.fill;
+        canvas.drawCircle(wpPos, 10 * zoom, wpPaint);
+
+        final outlinePaint = Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5 * zoom;
+        canvas.drawCircle(wpPos, 10 * zoom, outlinePaint);
+
+        final label = String.fromCharCode(65 + (i % 26));
+        final textPainter = TextPainter(
+          text: TextSpan(
+            text: label,
+            style: TextStyle(
+              color: isTarget ? Colors.black : Colors.white,
+              fontSize: 11 * zoom,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        textPainter.paint(
+          canvas,
+          wpPos - Offset(textPainter.width / 2, textPainter.height / 2),
+        );
       }
     }
 
